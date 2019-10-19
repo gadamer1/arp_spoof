@@ -43,27 +43,20 @@ uint8_t dest_mac[6];
 uint8_t sender_ip[4];
 uint8_t target_ip[4];
 uint8_t target_mac[6];
+uint8_t result_a[4];
+uint8_t result_b[4];
 
 map<uint8_t*,uint8_t*> m;
-
 /*store sender ip target ip*/
 
 void store_ip(char* argv[],int len){
 
-	uint8_t result_a[4];
-	uint8_t result_b[4];
 	for(int i=2;i < len ;i+=2){
 		parseIP(result_a,argv[i]);
 		parseIP(result_b,argv[i+1]);
 		m.insert(make_pair(result_a,result_b));
 	}
 	auto iter = m.begin();
-	for(int i=0;i<4;i++){
-		printf("%02x.",iter->first[i]);
-	}
-	for(int i=0;i<4;i++){
-		printf("%02x.",result_a[i]);
-	}
 }
 
 /* get my ip address and mac address */
@@ -121,7 +114,7 @@ int make_and_send_packet(
 
 
 /* ip parsing */
-void parseIP(uint8_t *result, char* source){
+void parseIP(uint8_t* result,char* source){
 	int temp =0;
 	int integer = 0;
 	int len = strlen(source);
@@ -195,7 +188,6 @@ int main(int argc, char* argv[])
 	}
 	int sender_target_len = (argc-2)/2;//sender and target's ip pair length
 	store_ip(argv,argc);
-
 	char* dev = argv[1];
 
 	char errbuf[PCAP_ERRBUF_SIZE];
@@ -218,12 +210,6 @@ int main(int argc, char* argv[])
 			for(int i=0;i<4;i++){
 				sender_ip[i] = iter->first[i];
 				target_ip[i] = iter->second[i];
-			}
-			for(int i=0;i<4;i++){
-				printf("%02x.",sender_ip[i]);
-			}
-			for(int i=0;i<4;i++){
-				printf("%02x.",target_ip[i]);
 			}
 			iter++;
 			check_loop++;

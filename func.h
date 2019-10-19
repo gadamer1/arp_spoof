@@ -1,6 +1,6 @@
 void store_ip(char* argv[],int len);
 void get_my_info(char *dev);
-void parseIP(uint8_t *result, char* source);
+void parseIP(uint8_t* result,char* source);
 int make_and_send_packet(
 	pcap_t * fp,
 	uint8_t dest_mac[],
